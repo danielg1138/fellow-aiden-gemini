@@ -1,38 +1,82 @@
-# Fellow Aiden
+# Fellow Aiden (Gemini & Grinder Edition)
+
+> 📌 **Fork Information**: This repository is an enhanced fork of [`9b/fellow-aiden`](https://github.com/9b/fellow-aiden). It expands the Brew Studio with Google Gemini Vision AI, home grinder calibration presets, and mobile phone pairing.
 
 [![PyPI version](https://badge.fury.io/py/fellow-aiden.svg)](https://badge.fury.io/py/fellow-aiden)
 
-This library provides an interface to the Fellow Aiden coffee brewer. An additional brew studio UI with support for AI-generated recipes is also included. You can run the Brew Studio locally on your system or make use of the hosted version: [https://fellow-brew-studio.streamlit.app/](https://fellow-brew-studio.streamlit.app/)
+This library provides an interface to the Fellow Aiden coffee brewer. An additional brew studio UI with support for AI-generated recipes is also included.
 
 ![Fellow Brew Studio](https://github.com/9b/fellow-aiden/blob/master/brew_studio/fellow-brew-studio.png?raw=true)
 
+---
+
+## 🚀 Fork Features & Key Differences
+
+Compared to the original [`9b/fellow-aiden`](https://github.com/9b/fellow-aiden), this fork includes:
+
+### 1. ⚙️ Grinder Presets & AI Grind Size Recommendations
+- **Grinder Selection**: Choose your exact home grinder from the Brew Studio sidebar:
+  - *Fellow Ode (Gen 2)*
+  - *Fellow Ode (Gen 1)*
+  - *Baratza Encore / Virtuoso*
+  - *Comandante C40*
+  - *1Zpresso K-Series*
+  - *Timemore C2/C3*
+  - *Niche Zero*
+  - *Generic / Microns*
+- **AI Physics Engine**: Gemini analyzes roast density, bean process (washed, natural, anaerobic), and altitude to recommend the exact dial setting number.
+- **Grind Banner UI**: Displays a dedicated grind recommendation banner at the top of the Brew Profile editor.
+- **Preferences**: Save your default grinder via `PREFERRED_GRINDER` in environment variables or `.streamlit/secrets.toml`.
+
+### 2. 📷 Google Gemini Vision & Gem Integration
+- **Coffee Bag Photo Scanning**: Upload or take a picture of any coffee bag label with your camera. Gemini Vision automatically reads the roaster name, origin, process, and tasting notes to design an optimal pour-over profile.
+- **Gemini 2.5 Flash**: Support for Gemini API Key mode and Gem/Prompt mode alongside OpenAI models.
+
+### 3. 📱 Mobile Phone Pairing & QR Code Generator
+- Built-in QR code generator in the Brew Studio sidebar that detects your local network IP (`http://<local-ip>:8501`) so you can open and control Brew Studio from your phone camera instantly.
+
+### 4. 🔑 Streamlit Secrets Auto-Connect
+- Auto-loads `FELLOW_EMAIL`, `FELLOW_PASSWORD`, `GEMINI_API_KEY`, and `PREFERRED_GRINDER` from Streamlit secrets or environment variables for seamless startup without re-entering credentials.
+
+---
+
 ## Quick Start
 
-**Install the library**:
+**Install requirements and package**:
 
 ```sh
-pip install fellow-aiden
-# or
-python setup.py install
+# Create virtual environment (Windows)
+py -m venv venv
+.\venv\Scripts\activate
+
+# Install requirements & fellow-aiden in editable mode
+pip install -e . streamlit openai google-genai qrcode pillow
 ```
 
-**Set ENV variables**:
+**Set Environment Variables or Secrets**:
 
 ```sh
 export FELLOW_EMAIL='YOUR-EMAIL-HERE'
 export FELLOW_PASSWORD='YOUR-PASSWORD-HERE'
+export GEMINI_API_KEY='YOUR-GEMINI-KEY-HERE'
+export PREFERRED_GRINDER='Niche Zero'
 ```
 
-## Sample Code
+**Run Brew Studio**:
 
-This sample code shows some of the range of functionality within the library:
+```sh
+streamlit run brew_studio/brew_studio.py
+```
+
+---
+
+## Original Sample Code
+
+This sample code shows the core library functionality:
 
 ```python
 import os
 from fellow_aiden import FellowAiden
-
-# EMAIL = "YOUR-EMAIL-HERE"
-# PASSWORD = "YOUR-PASSWORD-HERE"
 
 EMAIL = os.environ['FELLOW_EMAIL']
 PASSWORD = os.environ['FELLOW_PASSWORD']
@@ -70,7 +114,7 @@ aiden.create_profile(profile)
 pid = None
 option = aiden.get_profile_by_title('FellowAiden', fuzzy=True)
 if option:
-    pid = option['id'] # p0
+    pid = option['id']
 
 # Share a profile
 share_link = aiden.generate_share_link(pid)
@@ -83,25 +127,26 @@ aiden.create_profile_from_link('https://brew.link/p/ws98')
 
 # Add a schedule
 schedule = {
-    "days": [True, True, False, True, False, True, False], // sunday - saturday
-    "secondFromStartOfTheDay": 28800, // time since 12 am
+    "days": [True, True, False, True, False, True, False],
+    "secondFromStartOfTheDay": 28800,
     "enabled": True,
-    "amountOfWater": 950, // 150 - 1500
-    "profileId": "p7", // must be valid profile
+    "amountOfWater": 950,
+    "profileId": "p7",
 }
 aiden.create_schedule(schedule)
 
 # Delete a schedule
 aiden.delete_schedule_by_id('s0')
-
 ```
+
+---
 
 ## Features
 
-* Access all settings and details from Aiden brewer
+* Access all settings and details from Fellow Aiden brewer
 * Manage custom brewing profiles
 * Add shared profiles from URL
 * Generate share links from custom profiles
 * Search profiles using title (match and fuzzy)
 * Manage custom brewing schedules
-* Brew Studio UI with support for AI, Brew Links and Profile adjustments
+* Brew Studio UI with support for Gemini Vision, Grinder Presets, Brew Links, and Mobile Pairing
