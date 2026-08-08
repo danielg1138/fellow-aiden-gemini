@@ -1141,18 +1141,23 @@ def render_espresso_profile_editor(profile_dict, profile_key="espresso"):
 
     col_btn1, col_btn2, col_btn3 = st.columns(3)
     with col_btn1:
-        if st.button("💾 Save / Export Espresso Profile", key=f"{profile_key}_save"):
-            try:
-                res = st.session_state['aiden'].create_profile(profile_dict)
-                if isinstance(res, dict) and res.get("id"):
-                    st.success(f"Profile '{title_val}' saved to Fellow cloud over Wi-Fi!")
-                else:
-                    st.info(f"Espresso Profile '{title_val}' prepared. Use the Recipe Card or Brew Link to import into your Fellow app!")
-            except Exception as e:
-                st.info(f"Profile '{title_val}' prepared. Use the Recipe Card or Brew Link to import into your Fellow app!")
+        summary_text = (
+            f"☕ {title_val}\n"
+            f"• Dose: {profile_dict.get('dose_grams', 18.0)}g\n"
+            f"• Yield: {profile_dict.get('yield_grams', 36.0)}g (Ratio: {profile_dict.get('ratio', '1:2.0')})\n"
+            f"• Water Temp: {profile_dict.get('temperature_celsius', 93.0)}°C\n"
+            f"• Pre-Infusion: {profile_dict.get('pre_infusion_seconds', 6)}s @ {profile_dict.get('pre_infusion_pressure_bar', 3.0)} bar\n"
+            f"• Peak Pressure: {profile_dict.get('peak_pressure_bar', 9.0)} bar\n"
+            f"• Target Shot Time: {profile_dict.get('target_shot_time_seconds', 28)}s\n"
+            f"• Grinder Setting: {profile_dict.get('grind_recommendation', 'Fine')}"
+        )
+        if st.button("📋 Copy & Open Fellow App", key=f"{profile_key}_copy_app"):
+            st.success("✅ Recipe copied to text view below!")
+            st.markdown(f"📱 **[Tap to Open Fellow Mobile App](https://brew.link)**")
+            st.code(summary_text, language="markdown")
 
     with col_btn2:
-        if st.button("🔗 Generate Brew Link & QR Code", key=f"{profile_key}_brewlink"):
+        if st.button("🔗 Generate QR Code", key=f"{profile_key}_brewlink"):
             try:
                 link = get_share_link(profile_dict)
                 st.markdown(f"**Fellow Series 1 Brew Link**: [{link}]({link})")
@@ -1160,27 +1165,31 @@ def render_espresso_profile_editor(profile_dict, profile_key="espresso"):
                 if qr_buf:
                     st.image(qr_buf, caption="Scan with phone camera to import into Fellow App", width=200)
             except Exception as e:
-                pid = profile_dict.get('id', 'espresso')
-                link = f"https://brew.link/p/{pid}"
-                st.markdown(f"**Fellow Series 1 Brew Link**: [{link}]({link})")
-                qr_buf = generate_qr_code_buf(link)
+                summary_qr = (
+                    f"Title: {title_val}\n"
+                    f"Dose: {profile_dict.get('dose_grams', 18.0)}g\n"
+                    f"Yield: {profile_dict.get('yield_grams', 36.0)}g\n"
+                    f"Ratio: {profile_dict.get('ratio', '1:2.0')}\n"
+                    f"Temp: {profile_dict.get('temperature_celsius', 93.0)}C\n"
+                    f"Pre-Infusion: {profile_dict.get('pre_infusion_seconds', 6)}s @ {profile_dict.get('pre_infusion_pressure_bar', 3.0)} bar\n"
+                    f"Peak Pressure: {profile_dict.get('peak_pressure_bar', 9.0)} bar\n"
+                    f"Target Shot Time: {profile_dict.get('target_shot_time_seconds', 28)}s\n"
+                    f"Grinder: {profile_dict.get('grind_recommendation', 'Fine')}"
+                )
+                qr_buf = generate_qr_code_buf(summary_qr)
                 if qr_buf:
-                    st.image(qr_buf, caption="Scan with phone camera to import into Fellow App", width=200)
+                    st.image(qr_buf, caption="Scan with phone camera to import specs", width=220)
 
     with col_btn3:
-        with st.expander("📋 Copy Recipe Summary"):
-            summary_text = (
-                f"☕ **{title_val}**\n"
-                f"• **Dose**: {profile_dict.get('dose_grams', 18.0)}g\n"
-                f"• **Yield**: {profile_dict.get('yield_grams', 36.0)}g (Ratio: {profile_dict.get('ratio', '1:2.0')})\n"
-                f"• **Water Temp**: {profile_dict.get('temperature_celsius', 93.0)}°C\n"
-                f"• **Pre-Infusion**: {profile_dict.get('pre_infusion_seconds', 6)}s @ {profile_dict.get('pre_infusion_pressure_bar', 3.0)} bar\n"
-                f"• **Peak Pressure**: {profile_dict.get('peak_pressure_bar', 9.0)} bar\n"
-                f"• **Target Shot Time**: {profile_dict.get('target_shot_time_seconds', 28)}s\n"
-                f"• **Grinder Setting**: {profile_dict.get('grind_recommendation', 'Fine')}\n"
-            )
-            st.markdown(summary_text)
-            st.code(summary_text, language="markdown")
+        if st.button("💾 Save Profile", key=f"{profile_key}_save"):
+            try:
+                res = st.session_state['aiden'].create_profile(profile_dict)
+                if isinstance(res, dict) and res.get("id"):
+                    st.success(f"Profile '{title_val}' saved to Fellow cloud over Wi-Fi!")
+                else:
+                    st.info(f"Espresso Profile '{title_val}' prepared. Tap 'Copy & Open Fellow App' to add it to your Series 1 over Bluetooth!")
+            except Exception as e:
+                st.info(f"Profile '{title_val}' prepared. Tap 'Copy & Open Fellow App' to add it to your Series 1 over Bluetooth!")
 
     st.markdown("---")
     st.markdown("#### 📖 Barista Rationale & Tasting Notes")

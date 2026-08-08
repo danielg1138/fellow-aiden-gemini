@@ -10,6 +10,18 @@ This library provides an interface to the Fellow Aiden coffee brewer. An additio
 
 ---
 
+## ⚡ Device Support & Status Matrix
+
+| Device | Status | Cloud REST API Support | Notes |
+| :--- | :---: | :---: | :--- |
+| **Fellow Aiden (Pour-Over)** | ✅ **Fully Supported** | Full Read/Write (`GET/POST /v1/devices/{id}/profiles`) | Wi-Fi profile sync, schedule management, instant cloud profile creation & `brew.link` shortcode generation. |
+| **Fellow Espresso Series 1** | 🧪 **Experimental / WIP** | Cloud Library Read (`GET /v1/profiles`), BLE Mobile Sync | Cloud recipe library discovery (8,900+ recipes) and AI shot parameter generation. *Note: Custom profile creation on Series 1 requires Bluetooth (BLE) sync via the official Fellow Mobile App.* |
+
+> [!NOTE]  
+> **Espresso Series 1 Notice**: Fellow's cloud API permits third-party REST profile uploads for Aiden over Wi-Fi, but restricts custom Series 1 profile creation to local Bluetooth Low Energy (BLE) syncing inside the official Fellow mobile app. Brew Studio provides AI shot parameter generation, grinder dial setting recommendations, recipe summaries, and QR code cards to assist manual or app entry.
+
+---
+
 ## 🚀 Fork Features & Key Differences
 
 Compared to the original [`9b/fellow-aiden`](https://github.com/9b/fellow-aiden), this fork includes:
