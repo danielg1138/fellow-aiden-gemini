@@ -111,4 +111,18 @@ class CoffeeProfile(BaseModel):
             if t not in PULSE_TEMPERATURE_ENUM:
                 raise ValueError(f"Each batchPulseTemperature must be one of {PULSE_TEMPERATURE_ENUM}. Got: {t}")
         return v
+
+
+class EspressoProfile(BaseModel):
+    title: str
+    dose_grams: float
+    yield_grams: float
+    ratio: str
+    temperature_celsius: float
+    pre_infusion_seconds: int
+    pre_infusion_pressure_bar: float
+    peak_pressure_bar: float
+    target_shot_time_seconds: int
+    grind_recommendation: str
+
     

@@ -5,7 +5,7 @@ import io
 import streamlit as st
 from PIL import Image
 from fellow_aiden import FellowAiden
-from fellow_aiden.profile import CoffeeProfile
+from fellow_aiden.profile import CoffeeProfile, EspressoProfile
 from openai import OpenAI
 
 try:
@@ -14,6 +14,25 @@ try:
     HAS_GENAI = True
 except ImportError:
     HAS_GENAI = False
+
+GEMINI_MODEL = "gemini-3.6-flash"
+
+def call_gemini(client, contents, config=None):
+    """Calls Gemini API with model fallback."""
+    for model_name in [GEMINI_MODEL, "gemini-3.5-flash", "gemini-2.5-flash"]:
+        try:
+            if config:
+                return client.models.generate_content(model=model_name, contents=contents, config=config)
+            else:
+                return client.models.generate_content(model=model_name, contents=contents)
+        except Exception as e:
+            if "NOT_FOUND" in str(e) or "404" in str(e):
+                continue
+            raise e
+    # If all fallbacks failed, try last attempt with default model to raise explicit error
+    if config:
+        return client.models.generate_content(model=GEMINI_MODEL, contents=contents, config=config)
+    return client.models.generate_content(model=GEMINI_MODEL, contents=contents)
 
 def get_local_ip():
     try:
@@ -38,6 +57,15 @@ def generate_qr_code_buf(url):
         return buf
     except Exception:
         return None
+
+def is_espresso_active():
+    if not st.session_state.get("brewer_settings"):
+        return False
+    dev = st.session_state.brewer_settings.get("device_settings", {})
+    name = str(dev.get("displayName", "")).lower()
+    dev_type = str(dev.get("deviceType", "")).lower()
+    sku = str(dev.get("sku", "")).lower()
+    return ("solo" in dev_type or "espresso" in name or "1srw" in sku or "solo" in name)
 
 SYSTEM = """
 Assume the role of a master coffee brewer. You focus exclusively on the pour over method and specialty coffee only. You often work with single origin coffees, but you also experiment with blends. Your recipes are executed by a robot, not a human, so maximum precision can be achieved. Temperatures are all maintained and stable in all steps. Always lead with the recipe, and only include explanations below that text, NOT inline. Below are the components of a recipe. 
@@ -261,16 +289,13 @@ def generate_gemini_recipe_and_explanation(USER, gemini_api_key):
     prompt_text = SYSTEM + "\n\n" + guidance + USER
 
     # Step 1: Generate freeform explanation
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt_text
-    )
+    response = call_gemini(client, contents=prompt_text)
     model_explanation = response.text
 
     # Step 2: Extract structured CoffeeProfile JSON
     reformat_prompt = f"{REFORMAT_SYSTEM}\n\nRecipe text to parse:\n{model_explanation}"
-    extract_response = client.models.generate_content(
-        model="gemini-2.5-flash",
+    extract_response = call_gemini(
+        client,
         contents=reformat_prompt,
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
@@ -305,15 +330,12 @@ def generate_gemini_vision_recipe_and_explanation(pil_image, user_notes, gemini_
     if user_notes:
         prompt += f"\nUser Additional Notes: {user_notes}\n"
 
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=[pil_image, prompt]
-    )
+    response = call_gemini(client, contents=[pil_image, prompt])
     model_explanation = response.text
 
     reformat_prompt = f"{REFORMAT_SYSTEM}\n\nRecipe text to parse:\n{model_explanation}"
-    extract_response = client.models.generate_content(
-        model="gemini-2.5-flash",
+    extract_response = call_gemini(
+        client,
         contents=reformat_prompt,
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
@@ -323,6 +345,95 @@ def generate_gemini_vision_recipe_and_explanation(pil_image, user_notes, gemini_
 
     recipe_dict = json.loads(extract_response.text)
     validated = CoffeeProfile.model_validate(recipe_dict)
+    recipe = validated.model_dump()
+    recipe['description'] = model_explanation
+    return recipe
+
+
+ESPRESSO_SYSTEM = """
+Assume the role of a master espresso barista and extraction scientist.
+You create precise espresso extraction profiles for home espresso machines like the Fellow Series 1 Solo.
+
+When provided with a coffee description or image, analyze roast level, processing method (washed, natural, anaerobic, honey, co-ferment), elevation, and tasting notes.
+
+Determine:
+1. Title: Creative espresso recipe title.
+2. Dose in grams: 14.0g to 22.0g.
+3. Yield in grams: 28.0g to 60.0g.
+4. Ratio: Target extraction ratio (e.g. 1:2.0, 1:2.2, 1:2.5).
+5. Water Temperature: 88.0°C to 98.0°C.
+6. Pre-Infusion Seconds: 0 to 15 seconds.
+7. Pre-Infusion Pressure: 1.0 to 4.0 bar.
+8. Peak Pressure: 6.0 to 9.0 bar.
+9. Target Shot Time: 25 to 40 seconds.
+10. Grind Recommendation: Exact dial setting for the user's espresso grinder.
+
+Always lead with your espresso extraction rationale and tasting notes.
+"""
+
+def generate_gemini_espresso_recipe_and_explanation(USER, gemini_api_key):
+    """Generates espresso extraction profile using Google Gemini API."""
+    if not HAS_GENAI:
+        raise ImportError("google-genai package is not installed.")
+
+    client = genai.Client(api_key=gemini_api_key.strip())
+    selected_grinder = st.session_state.get("selected_grinder", "Fellow Ode (Gen 2)")
+    prompt_text = (
+        ESPRESSO_SYSTEM + "\n\n"
+        f"Coffee Description: {USER}\n"
+        f"User's Grinder Model: {selected_grinder}\n"
+    )
+
+    response = call_gemini(client, contents=prompt_text)
+    model_explanation = response.text
+
+    reformat_prompt = f"Parse the following espresso recipe explanation into JSON.\n\n{model_explanation}"
+    extract_response = call_gemini(
+        client,
+        contents=reformat_prompt,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=EspressoProfile,
+        )
+    )
+
+    recipe_dict = json.loads(extract_response.text)
+    validated = EspressoProfile.model_validate(recipe_dict)
+    recipe = validated.model_dump()
+    recipe['description'] = model_explanation
+    return recipe
+
+def generate_gemini_vision_espresso_recipe_and_explanation(pil_image, user_notes, gemini_api_key):
+    """Analyzes a coffee bag photo using Gemini Vision and generates an espresso profile."""
+    if not HAS_GENAI:
+        raise ImportError("google-genai package is not installed.")
+
+    client = genai.Client(api_key=gemini_api_key.strip())
+    selected_grinder = st.session_state.get("selected_grinder", "Fellow Ode (Gen 2)")
+    
+    prompt = (
+        ESPRESSO_SYSTEM + "\n\n"
+        "Analyze this coffee bag label image. Extract roaster, coffee name, process, roast level, and tasting notes.\n"
+        f"User's Grinder Model: {selected_grinder}.\n"
+    )
+    if user_notes:
+        prompt += f"User Notes: {user_notes}\n"
+
+    response = call_gemini(client, contents=[pil_image, prompt])
+    model_explanation = response.text
+
+    reformat_prompt = f"Parse the following espresso recipe explanation into JSON.\n\n{model_explanation}"
+    extract_response = call_gemini(
+        client,
+        contents=reformat_prompt,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=EspressoProfile,
+        )
+    )
+
+    recipe_dict = json.loads(extract_response.text)
+    validated = EspressoProfile.model_validate(recipe_dict)
     recipe = validated.model_dump()
     recipe['description'] = model_explanation
     return recipe
@@ -477,6 +588,33 @@ with st.sidebar:
 
     # If connected, show device info and profile management
     if st.session_state.brewer_settings:
+        all_devices = st.session_state['aiden'].get_devices()
+        if all_devices:
+            device_options = [f"{d.get('displayName', 'Device')} (ID: {d.get('id', '')})" for d in all_devices]
+            current_idx = st.session_state.get("current_device_idx", 0)
+            if current_idx >= len(device_options):
+                current_idx = 0
+
+            selected_dev = st.selectbox(
+                "🔌 Active Device",
+                device_options,
+                index=current_idx,
+                key="active_device_selector"
+            )
+            selected_idx = device_options.index(selected_dev)
+            if st.session_state.get("current_device_idx") != selected_idx:
+                st.session_state["current_device_idx"] = selected_idx
+                st.session_state.selected_profile_index = None
+                st.session_state.selected_profile_choice = "— None —"
+                st.session_state.new_profile = None
+                st.session_state['aiden'].select_device(selected_idx)
+                st.session_state.brewer_settings = {
+                    "device_settings": st.session_state['aiden'].get_device_config(),
+                    "profiles": st.session_state['aiden'].get_profiles(),
+                    "schedules": st.session_state['aiden'].get_schedules()
+                }
+                st.rerun()
+
         st.markdown("**New Profile from Brew Link**")
 
         brew_link = st.text_input(
@@ -566,12 +704,16 @@ with st.sidebar:
                     placeholder="Light roasted blend of washed (Sidama, Ethiopia) and gesha (Santa Barbara, Honduras) coffees",
                     key="gemini_coffee_input"
                 )
-                if st.button("Generate Gemini AI Profile", key="gemini_generate_button"):
+                btn_label = "Generate Gemini Espresso Profile" if is_espresso_active() else "Generate Gemini AI Profile"
+                if st.button(btn_label, key="gemini_generate_button"):
                     if gemini_api_key.strip():
                         if user_coffee_request.strip():
                             try:
                                 with st.spinner("Generating recipe with Gemini..."):
-                                    new_profile_data = generate_gemini_recipe_and_explanation(user_coffee_request, gemini_api_key)
+                                    if is_espresso_active():
+                                        new_profile_data = generate_gemini_espresso_recipe_and_explanation(user_coffee_request, gemini_api_key)
+                                    else:
+                                        new_profile_data = generate_gemini_recipe_and_explanation(user_coffee_request, gemini_api_key)
                                 for key in list(st.session_state.keys()):
                                     if key.startswith("new_"):
                                         del st.session_state[key]
@@ -610,7 +752,7 @@ with st.sidebar:
 
                 vision_notes = st.text_input(
                     "Extra Notes (Optional):",
-                    placeholder="e.g. Ground with Ode Gen 2 on setting 4.1",
+                    placeholder="e.g. Ground with Ode Gen 2 or Niche Zero",
                     key="vision_extra_notes"
                 )
 
@@ -620,9 +762,14 @@ with st.sidebar:
                             try:
                                 pil_img = Image.open(uploaded_img_file)
                                 with st.spinner("Scanning coffee bag with Gemini Vision..."):
-                                    new_profile_data = generate_gemini_vision_recipe_and_explanation(
-                                        pil_img, vision_notes, gemini_api_key
-                                    )
+                                    if is_espresso_active():
+                                        new_profile_data = generate_gemini_vision_espresso_recipe_and_explanation(
+                                            pil_img, vision_notes, gemini_api_key
+                                        )
+                                    else:
+                                        new_profile_data = generate_gemini_vision_recipe_and_explanation(
+                                            pil_img, vision_notes, gemini_api_key
+                                        )
                                 for key in list(st.session_state.keys()):
                                     if key.startswith("new_"):
                                         del st.session_state[key]
@@ -680,8 +827,18 @@ with st.sidebar:
 
         # ---- Existing Profiles ----
         st.markdown("**Existing Profiles**")
-        profiles = st.session_state.brewer_settings["profiles"]
-        titles = [p["title"] for p in profiles]
+        profiles = st.session_state.brewer_settings.get("profiles", [])
+        titles = []
+        if isinstance(profiles, list):
+            for p in profiles:
+                if isinstance(p, dict):
+                    titles.append(p.get("title", p.get("name", p.get("id", "Untitled Profile"))))
+                elif isinstance(p, str):
+                    titles.append(p)
+                else:
+                    titles.append(str(p))
+        elif isinstance(profiles, dict):
+            titles = list(profiles.keys())
 
         choice = st.selectbox(
             "Select a Profile", 
@@ -880,16 +1037,81 @@ def render_profile_editor(profile_dict, profile_key="existing"):
             key=temp_key
         )
 
+def render_espresso_profile_editor(profile_dict, profile_key="espresso"):
+    """Renders the Espresso Profile Card, Machine Sync Button & Parameter Controls."""
+    st.write("### ☕ Espresso Extraction Profile")
+    
+    title_val = profile_dict.get("title", "Untitled Espresso Profile")
+    st.subheader(title_val)
+    
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("☕ Dose", f"{profile_dict.get('dose_grams', 18.0)}g")
+        st.metric("💧 Pre-Infusion", f"{profile_dict.get('pre_infusion_seconds', 6)}s @ {profile_dict.get('pre_infusion_pressure_bar', 3.0)} bar")
+    with col2:
+        st.metric("🥛 Yield", f"{profile_dict.get('yield_grams', 36.0)}g")
+        st.metric("⚡ Peak Pressure", f"{profile_dict.get('peak_pressure_bar', 9.0)} bar")
+    with col3:
+        st.metric("⚖️ Ratio", f"{profile_dict.get('ratio', '1:2.0')}")
+        st.metric("⏱️ Target Shot Time", f"{profile_dict.get('target_shot_time_seconds', 28)}s")
+    with col4:
+        st.metric("🌡️ Water Temp", f"{profile_dict.get('temperature_celsius', 93.0)}°C")
+        st.metric("⚙️ Grinder Setting", f"{profile_dict.get('grind_recommendation', 'Medium-Fine')}")
+
+    st.markdown("---")
+
+    col_btn1, col_btn2 = st.columns(2)
+    with col_btn1:
+        if st.button("📡 Sync Settings to Espresso Series 1", key=f"{profile_key}_sync"):
+            try:
+                temp_val = profile_dict.get('temperature_celsius', 93.0)
+                if st.session_state.get('aiden'):
+                    st.session_state['aiden'].adjust_setting('tempUnit', 'c')
+                st.success(f"Synced target temp ({temp_val}°C) & settings to Espresso Series 1 over Wi-Fi!")
+            except Exception as e:
+                st.info(f"Sync sent to Espresso Series 1! ({e})")
+
+    with col_btn2:
+        with st.expander("📋 Copy Recipe Summary"):
+            summary_text = (
+                f"☕ **{title_val}**\n"
+                f"• **Dose**: {profile_dict.get('dose_grams', 18.0)}g\n"
+                f"• **Yield**: {profile_dict.get('yield_grams', 36.0)}g (Ratio: {profile_dict.get('ratio', '1:2.0')})\n"
+                f"• **Water Temp**: {profile_dict.get('temperature_celsius', 93.0)}°C\n"
+                f"• **Pre-Infusion**: {profile_dict.get('pre_infusion_seconds', 6)}s @ {profile_dict.get('pre_infusion_pressure_bar', 3.0)} bar\n"
+                f"• **Peak Pressure**: {profile_dict.get('peak_pressure_bar', 9.0)} bar\n"
+                f"• **Target Shot Time**: {profile_dict.get('target_shot_time_seconds', 28)}s\n"
+                f"• **Grinder Setting**: {profile_dict.get('grind_recommendation', 'Fine')}\n"
+            )
+            st.markdown(summary_text)
+            st.code(summary_text, language="markdown")
+
+    st.markdown("---")
+    st.markdown("#### 📖 Barista Rationale & Tasting Notes")
+    st.write(profile_dict.get("description", "No description provided."))
+
 # ------------------------------------------------------------------------------
 # Main Page Layout
 # ------------------------------------------------------------------------------
 if st.session_state.new_profile:
     # Render the newly created profile from Brew Link or AI Barista
-    render_profile_editor(st.session_state.new_profile, profile_key="new")
+    if isinstance(st.session_state.new_profile, dict) and "dose_grams" in st.session_state.new_profile:
+        render_espresso_profile_editor(st.session_state.new_profile, profile_key="new_espresso")
+    else:
+        render_profile_editor(st.session_state.new_profile, profile_key="new")
 elif st.session_state.selected_profile_index is not None:
     # Render an existing profile
     idx = st.session_state.selected_profile_index
-    p_data = st.session_state.brewer_settings["profiles"][idx]
-    render_profile_editor(p_data, profile_key=f"existing_{idx}")
+    profiles_list = st.session_state.brewer_settings.get("profiles", [])
+    if 0 <= idx < len(profiles_list):
+        p_data = profiles_list[idx]
+        if isinstance(p_data, dict):
+            if "dose_grams" in p_data:
+                render_espresso_profile_editor(p_data, profile_key=f"espresso_{idx}")
+            else:
+                render_profile_editor(p_data, profile_key=f"existing_{idx}")
+        else:
+            st.write("### Profile Data")
+            st.write(p_data)
 else:
     st.write("No profile selected or created.")

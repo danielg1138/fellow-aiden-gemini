@@ -114,15 +114,46 @@ class FellowAiden:
             
         parsed = json.loads(response.content)
         self._log.debug(parsed)
-        self._device_config = parsed[0]  # Assumes single brewer per account
+        self._devices = parsed if isinstance(parsed, list) else [parsed]
+        self._device_config = self._devices[0]  # Default to first device
         self._brewer_id = self._device_config['id']
 
         self._profiles = None
         self._schedules = None
 
-
         self._log.debug("Brewer ID: %s" % self._brewer_id)
         self._log.info("Device and profile information set")
+
+    def get_devices(self, remote=False):
+        """Return all registered devices for the account."""
+        if remote or not hasattr(self, '_devices') or self._devices is None:
+            self.__device()
+        return self._devices
+
+    def select_device(self, index_or_id):
+        """Switch active device by index or ID."""
+        if not hasattr(self, '_devices') or self._devices is None:
+            self.__device()
+
+        if isinstance(index_or_id, int):
+            if 0 <= index_or_id < len(self._devices):
+                self._device_config = self._devices[index_or_id]
+            else:
+                raise IndexError(f"Device index {index_or_id} out of range (0..{len(self._devices)-1})")
+        else:
+            found = False
+            for d in self._devices:
+                if d.get('id') == index_or_id:
+                    self._device_config = d
+                    found = True
+                    break
+            if not found:
+                raise ValueError(f"Device with ID '{index_or_id}' not found.")
+
+        self._brewer_id = self._device_config['id']
+        self._profiles = None
+        self._schedules = None
+        return self._device_config
 
     @property
     def profiles(self):
@@ -137,9 +168,12 @@ class FellowAiden:
                 # Retry the request with the new token
                 response = self.SESSION.get(profiles_url)
 
-            parsed = json.loads(response.content)
-            self._log.debug(parsed)
-            self._profiles = parsed
+            if response.status_code == 200:
+                parsed = json.loads(response.content)
+                self._log.debug(parsed)
+                self._profiles = parsed if isinstance(parsed, list) else []
+            else:
+                self._profiles = []
         
         return self._profiles
     
@@ -156,9 +190,12 @@ class FellowAiden:
                 # Retry the request with the new token
                 response = self.SESSION.get(schedules_url)
 
-            parsed = json.loads(response.content)
-            self._log.debug(parsed)
-            self._schedules = parsed
+            if response.status_code == 200:
+                parsed = json.loads(response.content)
+                self._log.debug(parsed)
+                self._schedules = parsed if isinstance(parsed, list) else []
+            else:
+                self._schedules = []
         
         return self._schedules
 

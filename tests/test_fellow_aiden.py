@@ -116,6 +116,33 @@ class TestFellowAiden(unittest.TestCase):
         aiden.delete_profile_by_id('test_profile_id')
         mock_session.delete.assert_called_once()
 
+    @patch.object(FellowAiden, 'SESSION')
+    def test_multi_device_selection(self, mock_session):
+        mock_auth_res = MagicMock()
+        mock_auth_res.content = json.dumps({
+            'accessToken': 'test_access_token',
+            'refreshToken': 'test_refresh_token'
+        }).encode('utf-8')
+
+        mock_device_res = MagicMock()
+        mock_device_res.content = json.dumps([
+            {'id': 'aiden_id', 'displayName': 'Aiden Brewer'},
+            {'id': 'espresso_id', 'displayName': 'Espresso Series 1'}
+        ]).encode('utf-8')
+
+        mock_session.post.return_value = mock_auth_res
+        mock_session.get.return_value = mock_device_res
+
+        aiden = FellowAiden(self.email, self.password)
+        devices = aiden.get_devices()
+        self.assertEqual(len(devices), 2)
+        self.assertEqual(aiden._brewer_id, 'aiden_id')
+
+        # Select second device (Espresso Series 1)
+        selected = aiden.select_device(1)
+        self.assertEqual(selected['id'], 'espresso_id')
+        self.assertEqual(aiden._brewer_id, 'espresso_id')
+
 if __name__ == '__main__':
     unittest.main()
 

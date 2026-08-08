@@ -59,5 +59,23 @@ Enjoy your pour over!"""
         self.assertEqual(recipe["title"], "Raw JSON Recipe")
         self.assertEqual(recipe["ratio"], 15.5)
 
+    def test_espresso_profile_validation(self):
+        from fellow_aiden.profile import EspressoProfile
+        espresso_data = {
+            "title": "Modern Light Roast Espresso",
+            "dose_grams": 18.0,
+            "yield_grams": 45.0,
+            "ratio": "1:2.5",
+            "temperature_celsius": 94.5,
+            "pre_infusion_seconds": 6,
+            "pre_infusion_pressure_bar": 2.5,
+            "peak_pressure_bar": 8.5,
+            "target_shot_time_seconds": 30,
+            "grind_recommendation": "Fine - Niche Zero #14"
+        }
+        validated = EspressoProfile.model_validate(espresso_data)
+        self.assertEqual(validated.dose_grams, 18.0)
+        self.assertEqual(validated.yield_grams, 45.0)
+
 if __name__ == '__main__':
     unittest.main()
