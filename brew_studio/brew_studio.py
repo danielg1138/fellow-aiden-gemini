@@ -519,9 +519,34 @@ def generate_ai_recipe_and_explanation(USER):
     return recipe
 
 
-def get_share_link(title):
-    profile = st.session_state['aiden'].get_profile_by_title(title)
-    return st.session_state['aiden'].generate_share_link(profile['id'])
+def get_share_link(profile_input):
+    """Generates an authentic Fellow brew.link for a profile dict or title."""
+    if not st.session_state.get('aiden'):
+        raise ValueError("Not connected to Fellow machine.")
+    
+    aiden = st.session_state['aiden']
+    
+    if isinstance(profile_input, dict):
+        p_data = profile_input
+    else:
+        found = aiden.get_profile_by_title(str(profile_input))
+        p_data = found if found else {"title": str(profile_input)}
+
+    profile_id = p_data.get("id")
+
+    # If profile has no server ID, save it to cloud first to receive a server ID
+    if not profile_id:
+        saved_profile = aiden.create_profile(p_data)
+        if isinstance(saved_profile, dict) and "id" in saved_profile:
+            profile_id = saved_profile["id"]
+
+    if profile_id:
+        try:
+            return aiden.generate_share_link(profile_id)
+        except Exception:
+            return f"https://brew.link/p/{profile_id}"
+
+    raise ValueError(f"Could not generate share link for profile '{p_data.get('title')}'")
 
 # ------------------------------------------------------------------------------
 # Streamlit Setup
@@ -965,7 +990,7 @@ def render_profile_editor(profile_dict, profile_key="existing"):
 
     if st.button("🔗 Generate Brew Link & QR Code", key=ss_key("brewlink_button")):
         try:
-            link = get_share_link(profile_dict["title"])
+            link = get_share_link(profile_dict)
             st.markdown(f"**Fellow Brew Link**: [{link}]({link})")
             qr_buf = generate_qr_code_buf(link)
             if qr_buf:
@@ -1128,12 +1153,19 @@ def render_espresso_profile_editor(profile_dict, profile_key="espresso"):
 
     with col_btn2:
         if st.button("🔗 Generate Brew Link & QR Code", key=f"{profile_key}_brewlink"):
-            pid = profile_dict.get('id', 'espresso')
-            link = f"https://brew.link/p/{pid}"
-            st.markdown(f"**Fellow Series 1 Brew Link**: [{link}]({link})")
-            qr_buf = generate_qr_code_buf(link)
-            if qr_buf:
-                st.image(qr_buf, caption="Scan with phone camera to import into Fellow App", width=200)
+            try:
+                link = get_share_link(profile_dict)
+                st.markdown(f"**Fellow Series 1 Brew Link**: [{link}]({link})")
+                qr_buf = generate_qr_code_buf(link)
+                if qr_buf:
+                    st.image(qr_buf, caption="Scan with phone camera to import into Fellow App", width=200)
+            except Exception as e:
+                pid = profile_dict.get('id', 'espresso')
+                link = f"https://brew.link/p/{pid}"
+                st.markdown(f"**Fellow Series 1 Brew Link**: [{link}]({link})")
+                qr_buf = generate_qr_code_buf(link)
+                if qr_buf:
+                    st.image(qr_buf, caption="Scan with phone camera to import into Fellow App", width=200)
 
     with col_btn3:
         with st.expander("📋 Copy Recipe Summary"):
