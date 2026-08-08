@@ -15,24 +15,31 @@ try:
 except ImportError:
     HAS_GENAI = False
 
-GEMINI_MODEL = "gemini-3.6-flash"
-
 def call_gemini(client, contents, config=None):
-    """Calls Gemini API with model fallback."""
-    for model_name in [GEMINI_MODEL, "gemini-3.5-flash", "gemini-2.5-flash"]:
-        try:
-            if config:
-                return client.models.generate_content(model=model_name, contents=contents, config=config)
-            else:
-                return client.models.generate_content(model=model_name, contents=contents)
-        except Exception as e:
-            if "NOT_FOUND" in str(e) or "404" in str(e):
-                continue
-            raise e
-    # If all fallbacks failed, try last attempt with default model to raise explicit error
-    if config:
-        return client.models.generate_content(model=GEMINI_MODEL, contents=contents, config=config)
-    return client.models.generate_content(model=GEMINI_MODEL, contents=contents)
+    """Calls Gemini API with robust model fallback & retry for 503/429/404 errors."""
+    import time
+    candidate_models = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-3.5-flash-lite"]
+    last_exception = None
+    
+    for model_name in candidate_models:
+        for attempt in range(2):  # Try twice per model with a brief delay
+            try:
+                if config:
+                    return client.models.generate_content(model=model_name, contents=contents, config=config)
+                else:
+                    return client.models.generate_content(model=model_name, contents=contents)
+            except Exception as e:
+                last_exception = e
+                err_str = str(e).upper()
+                # Catch 503 UNAVAILABLE, 429 RESOURCE_EXHAUSTED, 404 NOT_FOUND, HIGH DEMAND
+                if any(term in err_str for term in ["503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "HIGH DEMAND", "404", "NOT_FOUND"]):
+                    time.sleep(1.0)
+                    continue
+                raise e
+
+    if last_exception:
+        raise last_exception
+    raise RuntimeError("All Gemini API models failed. Please try again.")
 
 def get_local_ip():
     try:
