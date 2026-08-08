@@ -1,7 +1,43 @@
+import json
+import re
+import socket
+import io
 import streamlit as st
+from PIL import Image
 from fellow_aiden import FellowAiden
 from fellow_aiden.profile import CoffeeProfile
 from openai import OpenAI
+
+try:
+    from google import genai
+    from google.genai import types
+    HAS_GENAI = True
+except ImportError:
+    HAS_GENAI = False
+
+def get_local_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+def generate_qr_code_buf(url):
+    try:
+        import qrcode
+        qr = qrcode.QRCode(version=1, box_size=5, border=2)
+        qr.add_data(url)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+        return buf
+    except Exception:
+        return None
 
 SYSTEM = """
 Assume the role of a master coffee brewer. You focus exclusively on the pour over method and specialty coffee only. You often work with single origin coffees, but you also experiment with blends. Your recipes are executed by a robot, not a human, so maximum precision can be achieved. Temperatures are all maintained and stable in all steps. Always lead with the recipe, and only include explanations below that text, NOT inline. Below are the components of a recipe. 
@@ -17,6 +53,20 @@ Pulse settings: These are independent and can vary for single and batch brews.
 Number of pulses: Steps in which water is poured over coffee. Values MUST be between 1 and 10.
 Time between pulses: Time in between each pulse. Values MUST be between 5 and 60 seconds. This MUST be included even if a single pulse is performed. 
 Pulse temperate. Independent temperature to use for a given pulse.  Values MUST be between 50 and 99 celsius.
+
+Grinder Dial Settings Knowledge:
+You are an expert on home coffee grinders. When given a coffee description or image, analyze roast density, process, and altitude, and determine the optimal grind size in microns (600-800µm for pour over).
+
+Calculate the exact setting for the user's specific grinder model using these calibration curves:
+- Fellow Ode Gen 2: Range 3.0 to 6.0 (e.g., 3.2 for light washed, 4.1 for medium, 5.1 for natural/dark).
+- Fellow Ode Gen 1: Range 1.2 to 3.2.
+- Baratza Encore / Virtuoso: Range 14 to 22 (e.g., 15 for light, 18 for medium).
+- Comandante C40: Range 20 to 26 clicks.
+- 1Zpresso K-Series: Range 6.0 to 7.5.
+- Timemore C2/C3: Range 15 to 22 clicks.
+- Niche Zero: Range 35 to 50 (e.g., 36 for light washed, 42 for medium, 48 for natural/dark).
+
+Include a section titled "GRIND RECOMMENDATION" at the top of your explanation with the setting number and brief rationale.
 
 Below is an example of a previous recipe you put together for a speciality coffee called "Fruit cake" where you tasted cinnamon sugar, baked apples, and blackberry compote.
 
@@ -65,7 +115,7 @@ Number of pulses: 3
 BATCH
 Pulse temp: 92°C 
 Number of pulses: 1
-"""    
+"""
 
 REFORMAT_SYSTEM = """
 Assume the role of a data engineer. You need to parse coffee recipes and their explanations so the data can be structured. Below are the important components of the recipe.
@@ -83,12 +133,8 @@ Time between pulses: Time in between each pulse. Values range from 5 to 60 secon
 Pulse temperate. Independent temperature to use for a given pulse.  Values range from 50 celsius to 99 celsius. 
 """
 
-
-# ------------------------------------------------------------------------------
-# Mock / Placeholder functions
-# ------------------------------------------------------------------------------
 def connect_to_coffee_brewer(email, password):
-    """Mock function returning a list of profile dicts."""
+    """Function returning a list of profile dicts."""
     email = email.strip()
     password = password.strip()
 
@@ -98,13 +144,13 @@ def connect_to_coffee_brewer(email, password):
         except Exception as e:
             if "incorrect" in str(e):
                 return False
+            raise e
         st.session_state['aiden'] = local
 
     obj = {
         'device_settings': {
             'name': st.session_state['aiden'].get_display_name(),
         },
-        # Make sure each profile has "description" if your mock doesn't already:
         'profiles': [
             {
                 **p,
@@ -122,15 +168,11 @@ def save_profile_to_coffee_machine(profile_name, updated_profile):
     updated_profile['profileType'] = 0
     
     try:
-        # Check if a profile with this name already exists
         existing_profile = st.session_state['aiden'].get_profile_by_title(profile_name)
-        
         if existing_profile:
-            # If profile exists, update it
             profile_id = existing_profile['id']
             st.session_state['aiden'].update_profile(profile_id, updated_profile)
         else:
-            # If profile doesn't exist, create a new one
             st.session_state['aiden'].create_profile(updated_profile)
     except Exception as e:
         st.warning(f"Failed to save profile: {e}")
@@ -138,14 +180,156 @@ def save_profile_to_coffee_machine(profile_name, updated_profile):
 def parse_brewlink(link):
     """Returns a dict with all profile fields parsed from the link."""
     parsed = st.session_state['aiden'].parse_brewlink_url(link)
-    # Add a 'description' key if not present:
     if 'description' not in parsed:
         parsed['description'] = ""
     return parsed
 
+GEMINI_GEM_PROMPT = """Assume the role of a master coffee brewer and data engineer for the Fellow Aiden pour-over machine.
+You focus exclusively on pour-over specialty coffee.
+
+When given a coffee description or roaster notes, output TWO sections:
+
+1. **RECIPE & RATIONALE**: A detailed explanation of your pour over strategy, brew ratio, bloom, and temperature pulse decisions.
+2. **BREW PROFILE JSON**: At the end of your response, output a markdown ```json block conforming EXACTLY to this schema so it can be loaded directly into Fellow Brew Studio:
+
+```json
+{
+  "profileType": 0,
+  "title": "<Creative title max 50 chars>",
+  "ratio": 16,
+  "bloomEnabled": true,
+  "bloomRatio": 2,
+  "bloomDuration": 30,
+  "bloomTemperature": 96,
+  "ssPulsesEnabled": true,
+  "ssPulsesNumber": 3,
+  "ssPulsesInterval": 23,
+  "ssPulseTemperatures": [96, 97, 98],
+  "batchPulsesEnabled": true,
+  "batchPulsesNumber": 2,
+  "batchPulsesInterval": 30,
+  "batchPulseTemperatures": [96, 97]
+}
+```
+
+Constraints:
+- Ratio: between 14 and 20 in 0.5 step increments.
+- Bloom ratio: between 1 and 3 in 0.5 step increments.
+- Bloom time: 1 to 120 seconds.
+- Bloom & Pulse temperatures: 50 to 99 °C.
+- Pulse count: 1 to 10. Time between pulses: 5 to 60 seconds.
+"""
+
+def parse_manual_gem_recipe(raw_text):
+    """
+    Parses a JSON block or text payload generated by a Gemini Gem or manual input into a CoffeeProfile dict.
+    """
+    text = raw_text.strip()
+    json_str = None
+
+    # Try finding JSON block enclosed in ```json ... ```
+    json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
+    if json_match:
+        json_str = json_match.group(1)
+    elif text.startswith('{') and text.endswith('}'):
+        json_str = text
+    else:
+        # Try extracting any { ... } block
+        curly_match = re.search(r'(\{.*\})', text, re.DOTALL)
+        if curly_match:
+            json_str = curly_match.group(1)
+
+    if not json_str:
+        raise ValueError("No valid JSON block found. Please ensure your Gem output includes a ```json ... ``` codeblock.")
+
+    data = json.loads(json_str)
+    description = data.pop('description', text)
+    validated = CoffeeProfile.model_validate(data)
+    recipe = validated.model_dump()
+    recipe['description'] = description
+    return recipe
+
+
+def generate_gemini_recipe_and_explanation(USER, gemini_api_key):
+    """Generates recipe and explanation using Google Gemini API."""
+    if not HAS_GENAI:
+        raise ImportError("google-genai package is not installed.")
+
+    client = genai.Client(api_key=gemini_api_key.strip())
+    selected_grinder = st.session_state.get("selected_grinder", "Fellow Ode (Gen 2)")
+    guidance = f"Suggest a recipe for the following coffee. User's Grinder Model: {selected_grinder}. Provide the exact dial setting number for this grinder and explanations below the recipe.\n"
+    prompt_text = SYSTEM + "\n\n" + guidance + USER
+
+    # Step 1: Generate freeform explanation
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt_text
+    )
+    model_explanation = response.text
+
+    # Step 2: Extract structured CoffeeProfile JSON
+    reformat_prompt = f"{REFORMAT_SYSTEM}\n\nRecipe text to parse:\n{model_explanation}"
+    extract_response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=reformat_prompt,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=CoffeeProfile,
+        )
+    )
+
+    recipe_dict = json.loads(extract_response.text)
+    validated = CoffeeProfile.model_validate(recipe_dict)
+    recipe = validated.model_dump()
+    recipe['description'] = model_explanation
+    return recipe
+
+
+def generate_gemini_vision_recipe_and_explanation(pil_image, user_notes, gemini_api_key):
+    """Analyzes a coffee bag photo using Gemini Vision and generates a recipe."""
+    if not HAS_GENAI:
+        raise ImportError("google-genai package is not installed.")
+
+    client = genai.Client(api_key=gemini_api_key.strip())
+    selected_grinder = st.session_state.get("selected_grinder", "Fellow Ode (Gen 2)")
+    
+    prompt = (
+        SYSTEM + "\n\n"
+        "You are presented with an image of a coffee bag label (and optional user notes).\n"
+        "1. Carefully inspect the label and read all text: roaster name, coffee title, origin/country/region, "
+        "processing method (washed, natural, anaerobic, honey, etc.), roast level, and tasting notes.\n"
+        "2. Based on these extracted details, design an optimal specialty pour-over recipe for the Fellow Aiden.\n"
+        f"3. User's Grinder Model: {selected_grinder}. Provide the exact dial setting number for this grinder.\n"
+        "4. Lead with your GRIND RECOMMENDATION and recipe rationale, followed by the recipe components.\n"
+    )
+    if user_notes:
+        prompt += f"\nUser Additional Notes: {user_notes}\n"
+
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=[pil_image, prompt]
+    )
+    model_explanation = response.text
+
+    reformat_prompt = f"{REFORMAT_SYSTEM}\n\nRecipe text to parse:\n{model_explanation}"
+    extract_response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=reformat_prompt,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=CoffeeProfile,
+        )
+    )
+
+    recipe_dict = json.loads(extract_response.text)
+    validated = CoffeeProfile.model_validate(recipe_dict)
+    recipe = validated.model_dump()
+    recipe['description'] = model_explanation
+    return recipe
+
 
 def extract_recipe_from_description(model_explanation):
-    """Extracts the recipe from the description."""
+    """Extracts the recipe from the description using OpenAI."""
     try:
         completion = st.session_state['oai'].beta.chat.completions.parse(
             model="gpt-4o",
@@ -164,7 +348,8 @@ def extract_recipe_from_description(model_explanation):
 
 
 def generate_ai_recipe_and_explanation(USER):
-    guidance = "Suggest a recipe for the following coffee. Provide your explanations below the recipe.\n"
+    selected_grinder = st.session_state.get("selected_grinder", "Fellow Ode (Gen 2)")
+    guidance = f"Suggest a recipe for the following coffee. User's Grinder Model: {selected_grinder}. Provide the exact dial setting number for this grinder and explanations below the recipe.\n"
     USER = ' '.join([guidance, USER])
     completion = st.session_state['oai'].chat.completions.create(
         model="o1-preview",
@@ -219,13 +404,29 @@ if "selected_profile_index" not in st.session_state:
 # Sidebar
 # ------------------------------------------------------------------------------
 with st.sidebar:
+    import os
+    default_email = os.environ.get("FELLOW_EMAIL", "")
+    if not default_email and hasattr(st, "secrets") and "FELLOW_EMAIL" in st.secrets:
+        default_email = st.secrets["FELLOW_EMAIL"]
+
+    default_password = os.environ.get("FELLOW_PASSWORD", "")
+    if not default_password and hasattr(st, "secrets") and "FELLOW_PASSWORD" in st.secrets:
+        default_password = st.secrets["FELLOW_PASSWORD"]
+
     st.header("Fellow Email Address")
-    email = st.text_input(" ", placeholder="Enter your email", 
+    email = st.text_input(" ", value=st.session_state.get("email", default_email), placeholder="Enter your email", 
                           key="email", label_visibility="collapsed")
 
     st.header("Fellow Password")
-    password = st.text_input(" ", placeholder="Enter your password", 
+    password = st.text_input(" ", value=st.session_state.get("password", default_password), placeholder="Enter your password", 
                              type="password", key="password", label_visibility="collapsed")
+
+    # Auto connect if secrets are provided and not already connected
+    if not st.session_state.brewer_settings and default_email and default_password and "auto_connected" not in st.session_state:
+        st.session_state["auto_connected"] = True
+        result = connect_to_coffee_brewer(default_email, default_password)
+        if result:
+            st.session_state.brewer_settings = result
 
     # Connect button
     if st.button("Connect"):
@@ -238,6 +439,41 @@ with st.sidebar:
             st.warning("Please enter email and password first.")
 
     st.markdown("---")
+
+    # Grinder Selection
+    GRINDER_MODELS = [
+        "Fellow Ode (Gen 2)",
+        "Fellow Ode (Gen 1)",
+        "Baratza Encore / Virtuoso",
+        "Comandante C40",
+        "1Zpresso K-Series",
+        "Timemore C2/C3",
+        "Niche Zero",
+        "Generic / Microns"
+    ]
+
+    default_grinder = os.environ.get("PREFERRED_GRINDER", "Fellow Ode (Gen 2)")
+    if hasattr(st, "secrets") and "PREFERRED_GRINDER" in st.secrets:
+        default_grinder = st.secrets["PREFERRED_GRINDER"]
+
+    selected_grinder = st.selectbox(
+        "⚙️ Your Coffee Grinder",
+        GRINDER_MODELS,
+        index=GRINDER_MODELS.index(default_grinder) if default_grinder in GRINDER_MODELS else 0,
+        key="selected_grinder"
+    )
+
+    st.markdown("---")
+
+    # Mobile Phone Pairing & QR Code helper
+    local_ip = get_local_ip()
+    mobile_url = f"http://{local_ip}:8501"
+    with st.expander("📱 Mobile Phone Pairing & QR Code"):
+        st.markdown(f"**Local Network URL**:\n`{mobile_url}`")
+        st.markdown("Connect your phone to the same Wi-Fi network and scan the QR code below:")
+        qr_buf = generate_qr_code_buf(mobile_url)
+        if qr_buf:
+            st.image(qr_buf, caption="Scan with Phone Camera", width=180)
 
     # If connected, show device info and profile management
     if st.session_state.brewer_settings:
@@ -270,43 +506,175 @@ with st.sidebar:
 
         # ---- AI BARISTA SECTION ----
         st.markdown("### AI Barista")
-        st.markdown("#### OpenAI API Key")
-        openai_api_key = st.text_input(" ", placeholder="Enter your OpenAI API Key", 
-                                    type="password", key="openai_api_key", label_visibility="collapsed")
-        user_coffee_request = st.text_area(
-            "Describe your coffee:",
-            placeholder="Light roasted blend of washed (Sidama, Ethiopia) and gesha (Santa Barbara, Honduras) coffees",
-            key="ai_barista_input"
+        
+        ai_provider = st.selectbox(
+            "AI Provider",
+            ["Google Gemini (Gem / No API Key)", "Google Gemini (API Key)", "OpenAI (ChatGPT)"],
+            key="ai_provider"
         )
 
-        openai_api_key = openai_api_key.strip()
-        if st.button("Generate AI Profile", key="ai_barista_button"):
-            if openai_api_key.strip():
-                st.session_state['oai'] = OpenAI(api_key=openai_api_key)
-                if user_coffee_request.strip():
+        if ai_provider == "Google Gemini (Gem / No API Key)":
+            with st.expander("📋 Gemini Gem Setup Instructions"):
+                st.markdown("1. Open [gemini.google.com](https://gemini.google.com) and click **Gems -> New Gem**.")
+                st.markdown("2. Name it **Fellow Aiden Barista**.")
+                st.markdown("3. Copy & paste the prompt instructions below into your Gem System Instructions:")
+                st.code(GEMINI_GEM_PROMPT, language="markdown")
+                st.markdown("4. Chat with your Gem about any coffee! Copy the output from Gemini and paste it into the box below.")
 
+            gem_paste_input = st.text_area(
+                "Paste Gem Output or JSON Recipe:",
+                placeholder="Paste the output or JSON generated by your Gemini Gem here...",
+                key="gem_paste_input",
+                height=150
+            )
+
+            if st.button("Load Recipe from Gem Output", key="gem_parse_button"):
+                if gem_paste_input.strip():
                     try:
-                        new_profile_data = generate_ai_recipe_and_explanation(user_coffee_request)
+                        new_profile_data = parse_manual_gem_recipe(gem_paste_input)
+                        for key in list(st.session_state.keys()):
+                            if key.startswith("new_"):
+                                del st.session_state[key]
+                        st.session_state.new_profile = new_profile_data
+                        st.session_state.selected_profile_index = None
+                        st.session_state.selected_profile_choice = "— None —"
+                        st.success("Gem profile loaded successfully!")
                     except Exception as e:
-                        st.warning(f"Failed to generate AI recipe: {e}")
-                        new_profile_data = None
-                    
-                    # 2. Clear out old "new_*" keys
-                    for key in list(st.session_state.keys()):
-                        if key.startswith("new_"):
-                            del st.session_state[key]
-                    
-                    # 3. Set the brand-new profile
-                    st.session_state.new_profile = new_profile_data
-                    
-                    # 4. Clear out existing profile selection
-                    st.session_state.selected_profile_index = None
-                    st.session_state.selected_profile_choice = "— None —"
-
+                        st.warning(f"Failed to parse Gem recipe: {e}")
                 else:
-                    st.warning("Please enter a description first.")
-            else:
-                st.warning("Please enter an OpenAI key first.")
+                    st.warning("Please paste Gem output or JSON first.")
+
+        elif ai_provider == "Google Gemini (API Key)":
+            import os
+            default_gemini_key = os.environ.get("GEMINI_API_KEY", "")
+            if not default_gemini_key and hasattr(st, "secrets") and "GEMINI_API_KEY" in st.secrets:
+                default_gemini_key = st.secrets["GEMINI_API_KEY"]
+
+            gemini_api_key = st.text_input(
+                "Google Gemini API Key",
+                value=st.session_state.get("gemini_api_key", default_gemini_key),
+                placeholder="Enter Gemini API Key (from AI Studio)",
+                type="password",
+                key="gemini_api_key"
+            )
+
+            gemini_mode_tab1, gemini_mode_tab2 = st.tabs(["📝 Text Description", "📷 Coffee Bag Photo"])
+
+            with gemini_mode_tab1:
+                user_coffee_request = st.text_area(
+                    "Describe your coffee:",
+                    placeholder="Light roasted blend of washed (Sidama, Ethiopia) and gesha (Santa Barbara, Honduras) coffees",
+                    key="gemini_coffee_input"
+                )
+                if st.button("Generate Gemini AI Profile", key="gemini_generate_button"):
+                    if gemini_api_key.strip():
+                        if user_coffee_request.strip():
+                            try:
+                                with st.spinner("Generating recipe with Gemini..."):
+                                    new_profile_data = generate_gemini_recipe_and_explanation(user_coffee_request, gemini_api_key)
+                                for key in list(st.session_state.keys()):
+                                    if key.startswith("new_"):
+                                        del st.session_state[key]
+                                st.session_state.new_profile = new_profile_data
+                                st.session_state.selected_profile_index = None
+                                st.session_state.selected_profile_choice = "— None —"
+                                st.success("Gemini profile generated!")
+                            except Exception as e:
+                                st.warning(f"Failed to generate Gemini AI recipe: {e}")
+                        else:
+                            st.warning("Please enter a coffee description first.")
+                    else:
+                        st.warning("Please enter a Gemini API key first.")
+
+            with gemini_mode_tab2:
+                img_source_tab1, img_source_tab2 = st.tabs(["📁 File Upload", "📷 Camera Snap"])
+                uploaded_img_file = None
+
+                with img_source_tab1:
+                    uploaded_file = st.file_uploader(
+                        "Upload Coffee Bag Photo",
+                        type=["jpg", "jpeg", "png", "webp"],
+                        key="vision_file_uploader"
+                    )
+                    if uploaded_file:
+                        uploaded_img_file = uploaded_file
+
+                with img_source_tab2:
+                    camera_file = st.camera_input("Snap Coffee Bag Photo", key="vision_camera_input")
+                    if camera_file:
+                        uploaded_img_file = camera_file
+
+                if uploaded_img_file:
+                    pil_img = Image.open(uploaded_img_file)
+                    st.image(pil_img, caption="Coffee Bag Preview", use_container_width=True)
+
+                vision_notes = st.text_input(
+                    "Extra Notes (Optional):",
+                    placeholder="e.g. Ground with Ode Gen 2 on setting 4.1",
+                    key="vision_extra_notes"
+                )
+
+                if st.button("Scan Photo & Generate Profile", key="gemini_vision_generate_button"):
+                    if gemini_api_key.strip():
+                        if uploaded_img_file:
+                            try:
+                                pil_img = Image.open(uploaded_img_file)
+                                with st.spinner("Scanning coffee bag with Gemini Vision..."):
+                                    new_profile_data = generate_gemini_vision_recipe_and_explanation(
+                                        pil_img, vision_notes, gemini_api_key
+                                    )
+                                for key in list(st.session_state.keys()):
+                                    if key.startswith("new_"):
+                                        del st.session_state[key]
+                                st.session_state.new_profile = new_profile_data
+                                st.session_state.selected_profile_index = None
+                                st.session_state.selected_profile_choice = "— None —"
+                                st.success("Coffee bag scanned and profile generated!")
+                            except Exception as e:
+                                st.warning(f"Failed to scan coffee bag photo: {e}")
+                        else:
+                            st.warning("Please upload or snap a photo of your coffee bag first.")
+                    else:
+                        st.warning("Please enter a Gemini API key first.")
+
+        elif ai_provider == "OpenAI (ChatGPT)":
+            st.markdown("#### OpenAI API Key")
+            openai_api_key = st.text_input(" ", placeholder="Enter your OpenAI API Key", 
+                                        type="password", key="openai_api_key", label_visibility="collapsed")
+            user_coffee_request = st.text_area(
+                "Describe your coffee:",
+                placeholder="Light roasted blend of washed (Sidama, Ethiopia) and gesha (Santa Barbara, Honduras) coffees",
+                key="ai_barista_input"
+            )
+
+            openai_api_key = openai_api_key.strip()
+            if st.button("Generate AI Profile", key="ai_barista_button"):
+                if openai_api_key.strip():
+                    st.session_state['oai'] = OpenAI(api_key=openai_api_key)
+                    if user_coffee_request.strip():
+
+                        try:
+                            new_profile_data = generate_ai_recipe_and_explanation(user_coffee_request)
+                        except Exception as e:
+                            st.warning(f"Failed to generate AI recipe: {e}")
+                            new_profile_data = None
+                        
+                        # 2. Clear out old "new_*" keys
+                        for key in list(st.session_state.keys()):
+                            if key.startswith("new_"):
+                                del st.session_state[key]
+                        
+                        # 3. Set the brand-new profile
+                        st.session_state.new_profile = new_profile_data
+                        
+                        # 4. Clear out existing profile selection
+                        st.session_state.selected_profile_index = None
+                        st.session_state.selected_profile_choice = "— None —"
+
+                    else:
+                        st.warning("Please enter a description first.")
+                else:
+                    st.warning("Please enter an OpenAI key first.")
 
         st.markdown("---")
 
@@ -348,6 +716,12 @@ def render_profile_editor(profile_dict, profile_key="existing"):
         return f"{profile_key}_{k}"
 
     st.write("### Editing Profile")
+
+    # Display Grind Size Recommendation Banner if present
+    description_text = profile_dict.get("description", "")
+    if "GRIND RECOMMENDATION" in description_text.upper() or "SETTING" in description_text.upper():
+        current_grinder = st.session_state.get("selected_grinder", "Your Grinder")
+        st.info(f"⚙️ **Grinder Setting for {current_grinder}**\n\nSee full rationale in Description below.")
 
     # Title
     st.session_state[ss_key("title")] = st.text_input(

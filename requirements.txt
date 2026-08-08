@@ -10,5 +10,8 @@ typing_extensions==4.12.2
 urllib3==2.3.0
 wheel==0.44.0
 openai==1.59.8
+google-genai>=1.0.0
+qrcode>=7.0
+pillow>=10.0.0
 pillar-security
 fellow-aiden==0.2.2

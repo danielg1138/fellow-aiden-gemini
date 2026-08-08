@@ -1,17 +1,37 @@
 # Python
 *.pyc
-# Editor
-*\.sw[a-z]
-# Setuptools 'develop' target
+__pycache__/
+
+# System & OS
+.DS_Store
+Thumbs.db
+
+# Virtual Environments
+venv/
+venv3/
+ENV/
+env/
+
+# Secrets & Local Configs
+.env
+.env.*
+.streamlit/secrets.toml
+.streamlit/credentials.toml
+secrets.toml
+
+# Setuptools & Build
 *.egg-info/
 build/
 dist/
 setuptools-*
-venv/
-venv3/
+
+# IDE & Editor
+.vscode/
+.idea/
+*.sw[a-z]
+
+# Other local artifacts
 .pypirc
 .notes
 client.py
 .devcontainer
-.streamlit
-.vscode
