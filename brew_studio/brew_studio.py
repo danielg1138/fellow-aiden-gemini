@@ -284,6 +284,33 @@ def parse_manual_gem_recipe(raw_text):
     recipe['description'] = description
     return recipe
 
+def call_gemini(client, contents, config=None):
+    """Calls Gemini API with robust model fallback & retry for 503/429/404 errors."""
+    import time
+    candidate_models = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-3.5-flash-lite"]
+    last_exception = None
+    
+    for model_name in candidate_models:
+        for attempt in range(2):  # Try twice per model with a brief delay
+            try:
+                if config:
+                    res = client.models.generate_content(model=model_name, contents=contents, config=config)
+                else:
+                    res = client.models.generate_content(model=model_name, contents=contents)
+                return res, model_name
+            except Exception as e:
+                last_exception = e
+                err_str = str(e).upper()
+                # Catch 503 UNAVAILABLE, 429 RESOURCE_EXHAUSTED, 404 NOT_FOUND, HIGH DEMAND
+                if any(term in err_str for term in ["503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "HIGH DEMAND", "404", "NOT_FOUND"]):
+                    time.sleep(1.0)
+                    continue
+                raise e
+
+    if last_exception:
+        raise last_exception
+    raise RuntimeError("All Gemini API models failed. Please try again.")
+
 
 def generate_gemini_recipe_and_explanation(USER, gemini_api_key):
     """Generates recipe and explanation using Google Gemini API."""
@@ -296,12 +323,12 @@ def generate_gemini_recipe_and_explanation(USER, gemini_api_key):
     prompt_text = SYSTEM + "\n\n" + guidance + USER
 
     # Step 1: Generate freeform explanation
-    response = call_gemini(client, contents=prompt_text)
+    response, used_model = call_gemini(client, contents=prompt_text)
     model_explanation = response.text
 
     # Step 2: Extract structured CoffeeProfile JSON
     reformat_prompt = f"{REFORMAT_SYSTEM}\n\nRecipe text to parse:\n{model_explanation}"
-    extract_response = call_gemini(
+    extract_response, _ = call_gemini(
         client,
         contents=reformat_prompt,
         config=types.GenerateContentConfig(
@@ -314,6 +341,7 @@ def generate_gemini_recipe_and_explanation(USER, gemini_api_key):
     validated = CoffeeProfile.model_validate(recipe_dict)
     recipe = validated.model_dump()
     recipe['description'] = model_explanation
+    recipe['model_used'] = used_model
     return recipe
 
 
@@ -337,11 +365,11 @@ def generate_gemini_vision_recipe_and_explanation(pil_image, user_notes, gemini_
     if user_notes:
         prompt += f"\nUser Additional Notes: {user_notes}\n"
 
-    response = call_gemini(client, contents=[pil_image, prompt])
+    response, used_model = call_gemini(client, contents=[pil_image, prompt])
     model_explanation = response.text
 
     reformat_prompt = f"{REFORMAT_SYSTEM}\n\nRecipe text to parse:\n{model_explanation}"
-    extract_response = call_gemini(
+    extract_response, _ = call_gemini(
         client,
         contents=reformat_prompt,
         config=types.GenerateContentConfig(
@@ -354,6 +382,7 @@ def generate_gemini_vision_recipe_and_explanation(pil_image, user_notes, gemini_
     validated = CoffeeProfile.model_validate(recipe_dict)
     recipe = validated.model_dump()
     recipe['description'] = model_explanation
+    recipe['model_used'] = used_model
     return recipe
 
 
@@ -391,11 +420,11 @@ def generate_gemini_espresso_recipe_and_explanation(USER, gemini_api_key):
         f"User's Grinder Model: {selected_grinder}\n"
     )
 
-    response = call_gemini(client, contents=prompt_text)
+    response, used_model = call_gemini(client, contents=prompt_text)
     model_explanation = response.text
 
     reformat_prompt = f"Parse the following espresso recipe explanation into JSON.\n\n{model_explanation}"
-    extract_response = call_gemini(
+    extract_response, _ = call_gemini(
         client,
         contents=reformat_prompt,
         config=types.GenerateContentConfig(
@@ -408,6 +437,7 @@ def generate_gemini_espresso_recipe_and_explanation(USER, gemini_api_key):
     validated = EspressoProfile.model_validate(recipe_dict)
     recipe = validated.model_dump()
     recipe['description'] = model_explanation
+    recipe['model_used'] = used_model
     return recipe
 
 def generate_gemini_vision_espresso_recipe_and_explanation(pil_image, user_notes, gemini_api_key):
@@ -426,11 +456,11 @@ def generate_gemini_vision_espresso_recipe_and_explanation(pil_image, user_notes
     if user_notes:
         prompt += f"User Notes: {user_notes}\n"
 
-    response = call_gemini(client, contents=[pil_image, prompt])
+    response, used_model = call_gemini(client, contents=[pil_image, prompt])
     model_explanation = response.text
 
     reformat_prompt = f"Parse the following espresso recipe explanation into JSON.\n\n{model_explanation}"
-    extract_response = call_gemini(
+    extract_response, _ = call_gemini(
         client,
         contents=reformat_prompt,
         config=types.GenerateContentConfig(
@@ -443,6 +473,7 @@ def generate_gemini_vision_espresso_recipe_and_explanation(pil_image, user_notes
     validated = EspressoProfile.model_validate(recipe_dict)
     recipe = validated.model_dump()
     recipe['description'] = model_explanation
+    recipe['model_used'] = used_model
     return recipe
 
 
@@ -880,6 +911,9 @@ def render_profile_editor(profile_dict, profile_key="existing"):
         return f"{profile_key}_{k}"
 
     st.write("### Editing Profile")
+    model_used = profile_dict.get("model_used")
+    if model_used:
+        st.caption(f"🤖 **Generated by AI Model**: `{model_used}`")
 
     # Display Grind Size Recommendation Banner if present
     description_text = profile_dict.get("description", "")
@@ -1060,6 +1094,9 @@ def render_espresso_profile_editor(profile_dict, profile_key="espresso"):
     
     title_val = profile_dict.get("title", "Untitled Espresso Profile")
     st.subheader(title_val)
+    model_used = profile_dict.get("model_used")
+    if model_used:
+        st.caption(f"🤖 **Generated by AI Model**: `{model_used}`")
     
     col1, col2, col3, col4 = st.columns(4)
     with col1:
