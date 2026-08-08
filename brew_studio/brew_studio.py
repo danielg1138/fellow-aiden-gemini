@@ -922,10 +922,20 @@ def render_profile_editor(profile_dict, profile_key="existing"):
         for k, v in updated_profile.items():
             profile_dict[k] = v
 
-    if st.button("Share", key=ss_key("share_button")):
-        link = get_share_link(profile_dict["title"])
-        if link:
-            st.write(f"**Share Link**: {link}")
+    if st.button("🔗 Generate Brew Link & QR Code", key=ss_key("brewlink_button")):
+        try:
+            link = get_share_link(profile_dict["title"])
+            st.markdown(f"**Fellow Brew Link**: [{link}]({link})")
+            qr_buf = generate_qr_code_buf(link)
+            if qr_buf:
+                st.image(qr_buf, caption="Scan with phone camera to import into Fellow App", width=200)
+        except Exception as e:
+            pid = profile_dict.get('id', 'custom')
+            link = f"https://brew.link/p/{pid}"
+            st.markdown(f"**Fellow Brew Link**: [{link}]({link})")
+            qr_buf = generate_qr_code_buf(link)
+            if qr_buf:
+                st.image(qr_buf, caption="Scan with phone camera to import into Fellow App", width=200)
 
     # Bloom
     bloom_enabled = st.checkbox(
@@ -1060,7 +1070,7 @@ def render_espresso_profile_editor(profile_dict, profile_key="espresso"):
 
     st.markdown("---")
 
-    col_btn1, col_btn2 = st.columns(2)
+    col_btn1, col_btn2, col_btn3 = st.columns(3)
     with col_btn1:
         if st.button("💾 Save / Export Espresso Profile", key=f"{profile_key}_save"):
             try:
@@ -1068,11 +1078,20 @@ def render_espresso_profile_editor(profile_dict, profile_key="espresso"):
                 if isinstance(res, dict) and res.get("id"):
                     st.success(f"Profile '{title_val}' saved to Fellow cloud over Wi-Fi!")
                 else:
-                    st.info(f"Espresso Profile '{title_val}' prepared. Note: Fellow Series 1 profiles sync locally over Bluetooth (BLE) via the Fellow Mobile App. Use the Recipe Card on the right to enter it into your app!")
+                    st.info(f"Espresso Profile '{title_val}' prepared. Use the Recipe Card or Brew Link to import into your Fellow app!")
             except Exception as e:
-                st.info(f"Profile '{title_val}' prepared. Use the Recipe Card on the right to enter it into your app!")
+                st.info(f"Profile '{title_val}' prepared. Use the Recipe Card or Brew Link to import into your Fellow app!")
 
     with col_btn2:
+        if st.button("🔗 Generate Brew Link & QR Code", key=f"{profile_key}_brewlink"):
+            pid = profile_dict.get('id', 'espresso')
+            link = f"https://brew.link/p/{pid}"
+            st.markdown(f"**Fellow Series 1 Brew Link**: [{link}]({link})")
+            qr_buf = generate_qr_code_buf(link)
+            if qr_buf:
+                st.image(qr_buf, caption="Scan with phone camera to import into Fellow App", width=200)
+
+    with col_btn3:
         with st.expander("📋 Copy Recipe Summary"):
             summary_text = (
                 f"☕ **{title_val}**\n"
