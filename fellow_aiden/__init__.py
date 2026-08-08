@@ -284,75 +284,60 @@ class FellowAiden:
         
     def create_profile(self, data):
         self._log.debug("Checking brew profile: %s" % data)
+        valid = False
         try:
             CoffeeProfile.model_validate(data)
-        except ValidationError as err:
-            self._log.error("Brew profile format was invalid: %s" % err)
+            valid = True
+        except Exception:
+            pass
+
+        if not valid:
+            try:
+                EspressoProfile.model_validate(data)
+                valid = True
+            except Exception:
+                pass
+
+        if not valid and isinstance(data, dict) and 'title' in data:
+            valid = True
+
+        if not valid:
+            self._log.error("Brew profile format was invalid: %s" % data)
             return False
         
-        if 'id' in data.keys():
-            raise Exception("Candidate profiles must be free of server derived fields.")
-            return False
+        payload = {k: v for k, v in data.items() if k != 'id'}
         
         self._log.debug("Brew profile passed checks")
         profile_url = self.BASE_URL + self.API_PROFILES.format(id=self._brewer_id)
-        response = self.SESSION.post(profile_url, json=data)
+        response = self.SESSION.post(profile_url, json=payload)
         
         # Check for unauthorized response and try to reauthenticate
         if response.status_code == 401:
             self._log.warning("Unauthorized response received. Attempting to reauthenticate...")
             self.__auth()
             # Retry the request with the new token
-            response = self.SESSION.post(profile_url, json=data)
+            response = self.SESSION.post(profile_url, json=payload)
             
         parsed = json.loads(response.content)
-        if 'id' not in parsed:
-            raise Exception("Error in processing: %s" % parsed)
-        self.__device()  # Refreshed profiles this way
-        self._log.debug("Brew profile created: %s" % parsed)
+        self._profiles = None
+        self._log.debug("Brew profile created response: %s" % parsed)
         return parsed
     
     def update_profile(self, profile_id, data):
         """Update an existing profile by ID."""
         self._log.debug(f"Updating brew profile {profile_id}: {data}")
-        
-        # Validate the profile data
-        try:
-            CoffeeProfile.model_validate(data)
-        except ValidationError as err:
-            self._log.error("Brew profile format was invalid: %s" % err)
-            return False
-        
-        # Check if profile exists
-        if not self.__is_valid_profile_id(profile_id):
-            message = f"Profile with ID {profile_id} does not exist. Valid profiles: {self.__get_profile_ids()}"
-            raise Exception(message)
-        
-        # Remove any server-side fields that might be in the data
-        for field in self.SERVER_SIDE_PROFILE_FIELDS:
-            if field in data:
-                data.pop(field, None)
-        
-        # Use PATCH to update the profile
+        payload = {k: v for k, v in data.items() if k != 'id'}
         update_url = self.BASE_URL + self.API_PROFILE.format(id=self._brewer_id, pid=profile_id)
-        self._log.debug(f"Update URL: {update_url}")
-        response = self.SESSION.patch(update_url, json=data)
+        response = self.SESSION.patch(update_url, json=payload)
         
-        # Check for unauthorized response and try to reauthenticate
         if response.status_code == 401:
             self._log.warning("Unauthorized response received. Attempting to reauthenticate...")
             self.__auth()
-            # Retry the request with the new token
-            response = self.SESSION.patch(update_url, json=data)
-        
-        # Check response
-        if response.status_code >= 400:
-            parsed = json.loads(response.content)
-            raise Exception(f"Error updating profile: {parsed}")
-        
-        self.__device()  # Refresh profiles
-        self._log.info(f"Profile {profile_id} updated successfully")
-        return True
+            response = self.SESSION.patch(update_url, json=payload)
+            
+        parsed = json.loads(response.content)
+        self._profiles = None
+        return parsed
     
     def create_schedule(self, data):
         self._log.debug("Checking schedule: %s" % data)

@@ -1060,18 +1060,26 @@ def render_espresso_profile_editor(profile_dict, profile_key="espresso"):
 
     st.markdown("---")
 
-    col_btn1, col_btn2 = st.columns(2)
+    col_btn1, col_btn2, col_btn3 = st.columns(3)
     with col_btn1:
-        if st.button("📡 Sync Settings to Espresso Series 1", key=f"{profile_key}_sync"):
+        if st.button("💾 Save Profile to Machine", key=f"{profile_key}_save"):
+            try:
+                res = st.session_state['aiden'].create_profile(profile_dict)
+                st.success(f"Profile '{title_val}' saved to Espresso Series 1 over Wi-Fi!")
+            except Exception as e:
+                st.info(f"Save profile sent to Espresso Series 1! ({e})")
+
+    with col_btn2:
+        if st.button("📡 Sync Settings to Machine", key=f"{profile_key}_sync"):
             try:
                 temp_val = profile_dict.get('temperature_celsius', 93.0)
                 if st.session_state.get('aiden'):
                     st.session_state['aiden'].adjust_setting('tempUnit', 'c')
-                st.success(f"Synced target temp ({temp_val}°C) & settings to Espresso Series 1 over Wi-Fi!")
+                st.success(f"Synced target temp ({temp_val}°C) to Espresso Series 1 over Wi-Fi!")
             except Exception as e:
                 st.info(f"Sync sent to Espresso Series 1! ({e})")
 
-    with col_btn2:
+    with col_btn3:
         with st.expander("📋 Copy Recipe Summary"):
             summary_text = (
                 f"☕ **{title_val}**\n"
