@@ -159,7 +159,11 @@ class FellowAiden:
     def profiles(self):
         if self._profiles is None:
             self._log.debug("Fetching profiles")
-            profiles_url = self.BASE_URL + self.API_PROFILES.format(id=self._brewer_id)
+            if str(self._brewer_id).startswith("FS_") or "solo" in str(self._brewer_id).lower():
+                profiles_url = self.BASE_URL + "/v1/profiles"
+            else:
+                profiles_url = self.BASE_URL + self.API_PROFILES.format(id=self._brewer_id)
+
             response = self.SESSION.get(profiles_url)
             # Check for unauthorized response and try to reauthenticate
             if response.status_code == 401:

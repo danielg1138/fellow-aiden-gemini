@@ -1062,12 +1062,15 @@ def render_espresso_profile_editor(profile_dict, profile_key="espresso"):
 
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
-        if st.button("💾 Save Profile to Machine", key=f"{profile_key}_save"):
+        if st.button("💾 Save / Export Espresso Profile", key=f"{profile_key}_save"):
             try:
                 res = st.session_state['aiden'].create_profile(profile_dict)
-                st.success(f"Profile '{title_val}' saved to Espresso Series 1 over Wi-Fi!")
+                if isinstance(res, dict) and res.get("id"):
+                    st.success(f"Profile '{title_val}' saved to Fellow cloud over Wi-Fi!")
+                else:
+                    st.info(f"Espresso Profile '{title_val}' prepared. Note: Fellow Series 1 profiles sync locally over Bluetooth (BLE) via the Fellow Mobile App. Use the Recipe Card on the right to enter it into your app!")
             except Exception as e:
-                st.info(f"Save profile sent to Espresso Series 1! ({e})")
+                st.info(f"Profile '{title_val}' prepared. Use the Recipe Card on the right to enter it into your app!")
 
     with col_btn2:
         with st.expander("📋 Copy Recipe Summary"):
